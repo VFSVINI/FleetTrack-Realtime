@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="pt-BR" class="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FleetTrack · Central de operações</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: { extend: {
+        colors: { ink: { 950: '#0b1220', 900: '#0f182a', 800: '#142036', 700: '#1e2d4a', 600: '#2b3d60' }, signal: '#38bdf8' },
+        fontFamily: { sans: ['"IBM Plex Sans"', 'system-ui', 'sans-serif'] }
+      } }
+    }
+  </script>
+  <style>
+    body { font-variant-numeric: tabular-nums; }
+    .scroll { scrollbar-width: thin; scrollbar-color: #2b3d60 transparent; }
+    .leaflet-container { background: #0b1220; font-family: inherit; }
+    .leaflet-tooltip { background: #142036; color: #dbe4f3; border: 1px solid #2b3d60; box-shadow: none; }
+    .leaflet-tooltip-top:before { border-top-color: #2b3d60; }
+    :focus-visible { outline: 2px solid #38bdf8; outline-offset: 2px; }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  </style>
+</head>
+<body class="bg-ink-950 text-slate-200 font-sans min-h-screen lg:h-screen lg:overflow-hidden flex flex-col">
+
+  <header class="flex flex-wrap items-center gap-x-8 gap-y-3 px-4 py-3 border-b border-ink-700 bg-ink-900">
+    <div class="flex items-center gap-3">
+      <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="#142036" stroke="#2b3d60"/><path d="M7 19l5-9 4 6 2-3 3 6" fill="none" stroke="#38bdf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <div>
+        <h1 class="text-base font-semibold leading-tight">FleetTrack</h1>
+        <p class="text-xs text-slate-400 leading-tight">Central de operações da frota</p>
+      </div>
+    </div>
+
+    <dl class="flex flex-wrap gap-x-8 gap-y-2 flex-1">
+      <div><dt class="text-xs text-slate-400">Veículos online</dt><dd class="text-xl font-semibold" id="kpi-online">–</dd></div>
+      <div><dt class="text-xs text-slate-400">Em movimento</dt><dd class="text-xl font-semibold" id="kpi-moving">–</dd></div>
+      <div><dt class="text-xs text-slate-400">Velocidade média</dt><dd class="text-xl font-semibold" id="kpi-speed">–</dd></div>
+      <div><dt class="text-xs text-slate-400">Combustível crítico</dt><dd class="text-xl font-semibold" id="kpi-fuel">–</dd></div>
+      <div><dt class="text-xs text-slate-400">Alertas ativos</dt><dd class="text-xl font-semibold" id="kpi-alerts">–</dd></div>
+      <div><dt class="text-xs text-slate-400">Mensagens no último minuto</dt><dd class="text-xl font-semibold" id="kpi-msgs">–</dd></div>
+    </dl>
+
+    <div class="flex items-center gap-2 text-sm" role="status" aria-live="polite">
+      <span id="live-dot" class="inline-block h-2.5 w-2.5 rounded-full bg-slate-500"></span>
+      <span id="live-label" class="text-slate-300">Conectando…</span>
+    </div>
+  </header>
+
+  <main class="flex-1 min-h-0 grid gap-3 p-3 lg:grid-cols-[17rem_minmax(0,1fr)_21rem]">
+
+    <!-- Lista de veículos -->
+    <section class="bg-ink-900 border border-ink-700 rounded-lg flex flex-col min-h-0 max-h-[40vh] lg:max-h-none" aria-label="Veículos">
+      <div class="p-3 border-b border-ink-700">
+        <div class="flex items-baseline justify-between mb-2">
+          <h2 class="text-sm font-semibold">Veículos</h2>
+          <span class="text-xs text-slate-400" id="vehicle-count"></span>
+        </div>
+        <input id="filter" type="search" placeholder="Buscar por placa ou ID" aria-label="Buscar veículo"
+               class="w-full rounded-md bg-ink-950 border border-ink-600 px-3 py-1.5 text-sm placeholder:text-slate-500">
+      </div>
+      <ul id="vehicle-list" class="scroll flex-1 overflow-y-auto divide-y divide-ink-800"></ul>
+    </section>
+
+    <!-- Mapa e gráfico -->
+    <section class="flex flex-col gap-3 min-h-0 min-w-0">
+      <div class="relative flex-1 min-h-[22rem] bg-ink-900 border border-ink-700 rounded-lg overflow-hidden">
+        <div id="map" class="absolute inset-0" role="application" aria-label="Mapa da frota"></div>
+        <ul class="absolute bottom-3 left-3 z-[500] flex gap-3 rounded-md bg-ink-900/90 border border-ink-700 px-3 py-1.5 text-xs" id="legend"></ul>
+      </div>
+      <div class="bg-ink-900 border border-ink-700 rounded-lg p-3 h-52 flex flex-col">
+        <h2 class="text-sm font-semibold mb-1">Telemetria nos últimos 30 minutos</h2>
+        <div class="relative flex-1 min-h-0"><canvas id="chart" aria-label="Velocidade média e mensagens por minuto" role="img"></canvas></div>
+      </div>
+    </section>
+
+    <!-- Detalhe e alertas -->
+    <section class="flex flex-col gap-3 min-h-0">
+      <div class="bg-ink-900 border border-ink-700 rounded-lg p-3" id="detail" aria-live="polite"></div>
+      <div class="bg-ink-900 border border-ink-700 rounded-lg flex flex-col flex-1 min-h-[16rem] lg:min-h-0">
+        <div class="flex items-baseline justify-between p-3 border-b border-ink-700">
+          <h2 class="text-sm font-semibold">Alertas ativos</h2>
+          <span class="text-xs text-slate-400" id="alert-count"></span>
+        </div>
+        <ul id="alert-list" class="scroll flex-1 overflow-y-auto divide-y divide-ink-800"></ul>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="assets/app.js"></script>
+</body>
+</html>
