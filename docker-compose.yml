@@ -1,0 +1,134 @@
+name: fleettrack
+
+x-go-service: &go-service
+  restart: unless-stopped
+  networks: [fleet]
+
+x-go-env: &go-env
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/
+  DATABASE_URL: postgres://${POSTGRES_USER:-fleet}:${POSTGRES_PASSWORD:-fleet}@timescaledb:5432/${POSTGRES_DB:-fleet}?sslmode=disable
+  REDIS_ADDR: redis:6379
+
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fleet}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fleet}
+      POSTGRES_DB: ${POSTGRES_DB:-fleet}
+    ports: ["5432:5432"]
+    volumes:
+      - tsdb-data:/var/lib/postgresql/data
+      - ./infra/sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fleet} -d ${POSTGRES_DB:-fleet}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [fleet]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [fleet]
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbit-data:/var/lib/rabbitmq
+      - ./infra/rabbitmq/rabbitmq.conf:/etc/rabbitmq/conf.d/20-fleettrack.conf:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks: [fleet]
+
+  ingestor:
+    <<: *go-service
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.go
+      args: { CMD_PATH: ./ingestor-go/cmd/ingestor }
+    environment:
+      <<: *go-env
+      INGESTOR_PORT: "8080"
+      PUBLISHER_WORKERS: ${PUBLISHER_WORKERS:-8}
+    ports: ["8080:8080"]
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+
+  processor:
+    <<: *go-service
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.go
+      args: { CMD_PATH: ./processor-go/cmd/processor }
+    environment:
+      <<: *go-env
+      PROCESSOR_WORKERS: ${PROCESSOR_WORKERS:-8}
+      BATCH_SIZE: ${BATCH_SIZE:-500}
+      BATCH_INTERVAL: ${BATCH_INTERVAL:-1s}
+      SPEED_LIMIT_KMH: ${SPEED_LIMIT_KMH:-100}
+      SPEED_CRITICAL_KMH: ${SPEED_CRITICAL_KMH:-120}
+      FUEL_CRITICAL_PCT: ${FUEL_CRITICAL_PCT:-15}
+      ALERT_COOLDOWN: ${ALERT_COOLDOWN:-1m}
+    depends_on:
+      rabbitmq:    { condition: service_healthy }
+      timescaledb: { condition: service_healthy }
+      redis:       { condition: service_healthy }
+
+  api-gateway:
+    <<: *go-service
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.go
+      args: { CMD_PATH: ./api-gateway/cmd/api }
+    environment:
+      <<: *go-env
+      API_PORT: "8081"
+    ports: ["8081:8081"]
+    depends_on:
+      timescaledb: { condition: service_healthy }
+      redis:       { condition: service_healthy }
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    ports: ["3000:80"]
+    depends_on: [api-gateway]
+    networks: [fleet]
+
+  # Gerador de carga (opcional): docker compose --profile sim up simulator
+  simulator:
+    <<: *go-service
+    profiles: ["sim"]
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.go
+      args: { CMD_PATH: ./simulator/cmd/simulator }
+    command: ["-url", "http://ingestor:8080", "-vehicles", "${SIM_VEHICLES:-30}", "-interval", "1s"]
+    depends_on: [ingestor]
+
+networks:
+  fleet:
+
+volumes:
+  tsdb-data:
+  rabbit-data:
