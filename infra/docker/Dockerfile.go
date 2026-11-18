@@ -2,7 +2,7 @@
 # Dockerfile multi-stage compartilhado pelos serviços Go.
 # Uso: docker build -f infra/docker/Dockerfile.go --build-arg CMD_PATH=./ingestor-go/cmd/ingestor .
 
-FROM golang:1.23-alpine AS build
+FROM golang:1.25-alpine AS build
 ARG CMD_PATH
 WORKDIR /src
 ENV CGO_ENABLED=0
