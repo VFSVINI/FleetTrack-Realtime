@@ -1,0 +1,213 @@
+openapi: 3.0.3
+info:
+  title: FleetTrack-Realtime API
+  version: 1.0.0
+  description: API de consulta da frota (posição atual, histórico, métricas, alertas e cercas virtuais).
+servers:
+  - url: http://localhost:8081
+tags:
+  - name: Frota
+  - name: Métricas
+  - name: Alertas
+  - name: Sistema
+paths:
+  /health:
+    get:
+      tags: [Sistema]
+      summary: Verifica a saúde da API e das dependências
+      responses:
+        "200": { description: Tudo operacional }
+        "503": { description: Alguma dependência está indisponível }
+  /api/v1/fleet:
+    get:
+      tags: [Frota]
+      summary: Posição atual de toda a frota (lida do Redis)
+      responses:
+        "200":
+          description: Lista de veículos
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/VehicleState" } }
+                  count: { type: integer }
+  /api/v1/vehicles/{id}:
+    get:
+      tags: [Frota]
+      summary: Posição atual de um veículo
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string }, example: VEH-001 }
+      responses:
+        "200":
+          description: Estado do veículo
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VehicleState" }
+        "404": { description: Veículo não encontrado }
+  /api/v1/vehicles/{id}/history:
+    get:
+      tags: [Frota]
+      summary: Histórico de rota de um veículo (TimescaleDB)
+      description: Devolve os últimos `limit` pontos do intervalo, em ordem cronológica.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date-time }, description: "Padrão: 1 hora atrás" }
+        - { name: to, in: query, schema: { type: string, format: date-time }, description: "Padrão: agora" }
+        - { name: limit, in: query, schema: { type: integer, default: 1000, minimum: 1, maximum: 10000 } }
+      responses:
+        "200":
+          description: Pontos da rota
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Telemetry" } }
+                  count: { type: integer }
+        "400": { description: Parâmetros inválidos }
+  /api/v1/metrics/summary:
+    get:
+      tags: [Métricas]
+      summary: Indicadores gerais da frota
+      responses:
+        "200":
+          description: Resumo
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Summary" }
+  /api/v1/metrics/speed-series:
+    get:
+      tags: [Métricas]
+      summary: Velocidade média e volume de mensagens por minuto (time_bucket)
+      parameters:
+        - { name: minutes, in: query, schema: { type: integer, default: 30, minimum: 1, maximum: 1440 } }
+      responses:
+        "200":
+          description: Série temporal
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        bucket: { type: string, format: date-time }
+                        avg_speed_kmh: { type: number }
+                        messages: { type: integer }
+                  count: { type: integer }
+  /api/v1/metrics/vehicles:
+    get:
+      tags: [Métricas]
+      summary: Estatísticas por veículo nas últimas 24h (continuous aggregate)
+      responses:
+        "200":
+          description: Estatísticas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        vehicle_id: { type: string }
+                        avg_speed_kmh: { type: number }
+                        max_speed_kmh: { type: number }
+                        min_fuel_level: { type: number }
+                        samples: { type: integer }
+                  count: { type: integer }
+  /api/v1/alerts:
+    get:
+      tags: [Alertas]
+      summary: Lista alertas
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [active, all], default: active } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
+      responses:
+        "200":
+          description: Alertas do mais recente para o mais antigo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Alert" } }
+                  count: { type: integer }
+  /api/v1/alerts/{id}/ack:
+    post:
+      tags: [Alertas]
+      summary: Reconhece (encerra) um alerta ativo
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "200": { description: Alerta reconhecido }
+        "404": { description: Alerta não encontrado ou já reconhecido }
+  /api/v1/geofences:
+    get:
+      tags: [Frota]
+      summary: Cercas virtuais ativas
+      responses:
+        "200":
+          description: Cercas circulares
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Geofence" } }
+                  count: { type: integer }
+components:
+  schemas:
+    Telemetry:
+      type: object
+      properties:
+        vehicle_id: { type: string, example: VEH-001 }
+        latitude: { type: number, example: -8.0631 }
+        longitude: { type: number, example: -34.8711 }
+        speed_kmh: { type: number, example: 54.2 }
+        fuel_level: { type: number, description: Percentual 0-100, example: 63.5 }
+        engine_status: { type: string, enum: [on, off, idle] }
+        timestamp: { type: string, format: date-time }
+    VehicleState:
+      allOf:
+        - $ref: "#/components/schemas/Telemetry"
+        - type: object
+          properties:
+            updated_at: { type: string, format: date-time }
+            online: { type: boolean }
+    Summary:
+      type: object
+      properties:
+        vehicles_total: { type: integer }
+        vehicles_online: { type: integer }
+        vehicles_moving: { type: integer }
+        avg_speed_kmh: { type: number }
+        low_fuel_count: { type: integer }
+        active_alerts: { type: integer }
+        messages_last_minute: { type: integer }
+    Alert:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        vehicle_id: { type: string }
+        type: { type: string, enum: [SPEEDING, LOW_FUEL, GEOFENCE_ENTER, GEOFENCE_EXIT] }
+        severity: { type: string, enum: [info, warning, critical] }
+        message: { type: string }
+        latitude: { type: number }
+        longitude: { type: number }
+        created_at: { type: string, format: date-time }
+        acknowledged_at: { type: string, format: date-time, nullable: true }
+    Geofence:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        latitude: { type: number }
+        longitude: { type: number }
+        radius_m: { type: number }
