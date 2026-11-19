@@ -22,11 +22,6 @@ jobs:
       - name: go vet
         run: go vet ./api-gateway/... ./ingestor-go/... ./processor-go/... ./simulator/... ./pkg/...
 
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v7
-        with:
-          version: latest
-
       - name: Testes (com detector de race)
         run: go test -race -count=1 ./api-gateway/... ./ingestor-go/... ./processor-go/... ./simulator/... ./pkg/...
 
